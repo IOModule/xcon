@@ -1,0 +1,9 @@
+# Libraries required for xcon (macOS Network Monitor)
+# Install using: pip install -r xcon_requirements.txt
+
+PyQt6==6.5.3
+pyobjc-framework-Cocoa
+requests
+psutil
+objc
+ctypes-base  # Usually included in Python

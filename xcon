@@ -1,0 +1,27 @@
+#!/bin/bash
+
+# Resolve the real path of the script (handling symlinks)
+SOURCE="${BASH_SOURCE[0]}"
+while [ -h "$SOURCE" ]; do
+    DIR="$( cd -P "$( dirname "$SOURCE" )" && pwd )"
+    SOURCE="$(readlink "$SOURCE")"
+    [[ $SOURCE != /* ]] && SOURCE="$DIR/$SOURCE"
+done
+DIR="$( cd -P "$( dirname "$SOURCE" )" && pwd )"
+VENV_PATH="$DIR/.xcon_venv"
+
+if [ ! -d "$VENV_PATH" ]; then
+    echo "Error: Virtual environment not found at $VENV_PATH"
+    exit 1
+fi
+
+# Kill existing instances
+pkill -f xcon_app.py
+
+# Run the app in the background using the venv's python
+LOG_FILE="$HOME/xcon.log"
+nohup "$VENV_PATH/bin/python3" "$DIR/xcon_app.py" > "$LOG_FILE" 2>&1 &
+
+echo "🚀 X-Con Monitor started in the background."
+echo "Diagnostic logs available at: $LOG_FILE"
+echo "Check your menu bar for the icon."
