@@ -123,10 +123,13 @@ class NotificationPopup(QWidget):
         self.init_ui()
         
     def init_ui(self):
-        # High visibility flags for macOS
+        # High visibility flags for macOS - prevent focus stealing
         self.setWindowFlags(Qt.WindowType.FramelessWindowHint | 
                             Qt.WindowType.WindowStaysOnTopHint |
-                            Qt.WindowType.ToolTip)
+                            Qt.WindowType.ToolTip |
+                            Qt.WindowType.WindowDoesNotAcceptFocus)
+        
+        self.setAttribute(Qt.WidgetAttribute.WA_ShowWithoutActivating)
         
         # Layout
         layout = QVBoxLayout()
@@ -350,8 +353,6 @@ class XConApp(QApplication):
         popup = NotificationPopup(data)
         self.active_popups.append(popup)
         popup.show()
-        popup.raise_()
-        popup.activateWindow()
         
         # Cleanup closed popups
         self.active_popups = [p for p in self.active_popups if p.isVisible() or not p.isWidgetType()] 
