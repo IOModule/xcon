@@ -1,0 +1,22 @@
+# IOSYS by nelhorr - Windows Requirements
+
+To build or run IOSYS on Windows 11 (64-bit), you will need:
+
+## 1. Development Environment
+- **Go (Golang)**: Version 1.21 or higher (Download from golang.org).
+- **GCC/MinGW-w64**: Required if using CGO features (though we aim for pure Go where possible).
+
+## 2. Go Dependencies
+The following modules will be automatically downloaded during build:
+- `github.com/getlantern/systray`: For the system tray icon and menu.
+- `github.com/shirou/gopsutil/v3`: For process and network monitoring.
+
+## 3. Build Command (from macOS/Linux)
+If you want to cross-compile the `.exe` for Windows from your current machine:
+```bash
+GOOS=windows GOARCH=amd64 go build -o iosys_windows.exe main.go
+```
+
+## 4. Run Requirements
+- **Admin Privileges**: Some behavioral scans (like checking other processes) may require running as Administrator.
+- **Icon**: Ensure `icon/icon.png` is in the same directory as the executable, or embedded using a resource file.
