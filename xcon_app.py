@@ -5,7 +5,9 @@ import json
 import socket
 import threading
 import time
+import csv
 from datetime import datetime
+from pathlib import Path
 import requests
 import psutil
 
@@ -14,7 +16,7 @@ from ctypes import c_void_p
 from PyQt6.QtCore import Qt, QTimer, QThread, pyqtSignal, QPropertyAnimation, QEasingCurve, QRect, QPoint
 from PyQt6.QtWidgets import (QApplication, QWidget, QVBoxLayout, QLabel, 
                              QSystemTrayIcon, QMenu, QGraphicsDropShadowEffect)
-from PyQt6.QtGui import QColor, QFont, QAction, QIcon
+from PyQt6.QtGui import QColor, QFont, QAction, QIcon, QPixmap, QPainter
 
 # Native macOS imports for vibrancy
 try:
@@ -81,112 +83,7 @@ def get_location_info(ip):
         pass
     return {'location': 'Unknown Location', 'org': 'Unknown ISP'}
 
-# --- UI Components ---
-
-class VibrancyHelper:
-    @staticmethod
-    def apply_vibrancy(widget):
-        print(f"Applying vibrancy to {widget}...")
-        if NSVisualEffectView is None:
-            print("NSVisualEffectView is None, skipping vibrancy.")
-            return
-            
-        try:
-            view_ptr = widget.winId()
-            print(f"Window ID: {view_ptr}")
-            # In PyQt6, winId() returns an integer
-            nsview = objc.objc_object(c_void_p=int(view_ptr))
-            window = nsview.window()
-            print(f"Native Window found: {window}")
-            
-            # Create the effect view
-            effect_view = NSVisualEffectView.alloc().init()
-            effect_view.setFrame_(window.contentView().bounds())
-            effect_view.setAutoresizingMask_(NSViewWidthSizable | NSViewHeightSizable)
-            effect_view.setMaterial_(NSVisualEffectMaterialDark)
-            effect_view.setBlendingMode_(NSVisualEffectBlendingModeBehindWindow)
-            
-            # Insert at the bottom
-            window.contentView().addSubview_positioned_relativeTo_(effect_view, -1, None)
-            
-            # Make the window transparent to see the blur
-            widget.setAttribute(Qt.WidgetAttribute.WA_TranslucentBackground)
-            widget.setStyleSheet("background: transparent;")
-        except Exception as e:
-            print(f"Failed to apply vibrancy: {e}")
-
-class NotificationPopup(QWidget):
-    def __init__(self, data):
-        super().__init__()
-        print(f"DEBUG: Creating NotificationPopup for {data['process']}")
-        self.data = data
-        self.init_ui()
-        
-    def init_ui(self):
-        # High visibility flags for macOS - prevent focus stealing
-        self.setWindowFlags(Qt.WindowType.FramelessWindowHint | 
-                            Qt.WindowType.WindowStaysOnTopHint |
-                            Qt.WindowType.ToolTip |
-                            Qt.WindowType.WindowDoesNotAcceptFocus)
-        
-        self.setAttribute(Qt.WidgetAttribute.WA_ShowWithoutActivating)
-        
-        # Layout
-        layout = QVBoxLayout()
-        layout.setContentsMargins(20, 20, 20, 20)
-        self.setLayout(layout)
-        
-        # Process Name (Neon Cyan)
-        self.proc_label = QLabel(f"PROCESS: {self.data['process'].upper()}")
-        self.proc_label.setFont(QFont("SF Mono", 14, QFont.Weight.Bold))
-        self.proc_label.setStyleSheet(f"color: {NEON_CYAN}; background: transparent;")
-        layout.addWidget(self.proc_label)
-        
-        # Company (Neon Magenta)
-        self.comp_label = QLabel(f"COMPANY: {self.data.get('company', 'Unknown')}")
-        self.comp_label.setFont(QFont("SF Mono", 10))
-        self.comp_label.setStyleSheet(f"color: {NEON_MAGENTA}; background: transparent;")
-        layout.addWidget(self.comp_label)
-        
-        # Location (Neon Green)
-        self.loc_label = QLabel(f"LOCATION: {self.data['location']}")
-        self.loc_label.setFont(QFont("SF Mono", 11, QFont.Weight.Bold))
-        self.loc_label.setStyleSheet(f"color: {NEON_GREEN}; background: transparent;")
-        layout.addWidget(self.loc_label)
-        
-        # Window styling - SOLID BLACK with Neon Border
-        self.setStyleSheet(f"""
-            QWidget {{
-                background-color: #000000;
-                border: 2px solid {NEON_CYAN};
-                border-radius: 10px;
-            }}
-            QLabel {{
-                color: white;
-                background: transparent;
-            }}
-        """)
-        
-        # Positioning
-        screen = QApplication.primaryScreen().availableGeometry()
-        width, height = 360, 150
-        self.setFixedSize(width, height)
-        x = screen.width() - width - 20
-        y = 50
-        self.move(x, y)
-        
-        # Simple timer to close
-        self.close_timer = QTimer(self)
-        self.close_timer.setSingleShot(True)
-        self.close_timer.timeout.connect(self.close)
-        self.close_timer.start(DISPLAY_TIME)
-
-    def showEvent(self, event):
-        super().showEvent(event)
-        # Vibrancy removed temporarily to fix 'black box' issue
-        print("DEBUG: Popup shown")
-
-# --- Monitor Thread ---
+# --- Helper Functions ---
 
 class ConnectionMonitor(QThread):
     new_connection = pyqtSignal(dict)
@@ -289,7 +186,10 @@ class XConApp(QApplication):
     def __init__(self, args):
         super().__init__(args)
         
-        # Set macOS Activation Policy to Accessory (no dock icon, but shows in menu bar)
+        # Paths
+        self.history_file = Path("~/xcon_history.csv").expanduser()
+        
+        # Set macOS Activation Policy to Accessory
         if NSVisualEffectView:
             try:
                 ns_app = NSApplication.sharedApplication()
@@ -301,7 +201,6 @@ class XConApp(QApplication):
         self.setQuitOnLastWindowClosed(False)
         
         self.history = []
-        self.active_popups = [] # KEY: Prevent garbage collection
         
         # Tray Icon availability check
         if not QSystemTrayIcon.isSystemTrayAvailable():
@@ -309,7 +208,20 @@ class XConApp(QApplication):
         
         # Tray Icon
         self.tray = QSystemTrayIcon(self)
-        icon = self.style().standardIcon(self.style().StandardPixmap.SP_MessageBoxInformation)
+        
+        # Create custom "XN" Icon
+        pixmap = QPixmap(64, 64)
+        pixmap.fill(Qt.GlobalColor.transparent)
+        painter = QPainter(pixmap)
+        painter.setRenderHint(QPainter.RenderHint.Antialiasing)
+        painter.setPen(Qt.GlobalColor.black) # Use black for the template
+        font = QFont("Helvetica", 36, QFont.Weight.Bold)
+        painter.setFont(font)
+        painter.drawText(pixmap.rect(), Qt.AlignmentFlag.AlignCenter, "XN")
+        painter.end()
+        
+        icon = QIcon(pixmap)
+        icon.setIsMask(True) # This makes it a template icon on macOS (auto-colors)
         self.tray.setIcon(icon)
         self.tray.setToolTip("X-Con Network Monitor")
         
@@ -318,19 +230,13 @@ class XConApp(QApplication):
         self.tray.setContextMenu(self.menu)
         self.tray.show()
         
-        if self.tray.isVisible():
-            print("Tray icon is visible.")
-        else:
-            print("Warning: Tray icon is NOT visible.")
-        
         # Start Monitor
-        print("Starting connection monitor...")
         self.monitor = ConnectionMonitor()
         self.monitor.new_connection.connect(self.handle_new_connection)
         self.monitor.start()
         print("Initialization complete.")
         
-        # Test notification after 2 seconds
+        # Test notification
         QTimer.singleShot(2000, lambda: self.handle_new_connection({
             'process': 'System Test',
             'company': 'X-Con Monitor',
@@ -340,8 +246,62 @@ class XConApp(QApplication):
             'time': datetime.now().strftime("%H:%M:%S")
         }))
 
+    def log_to_csv(self, data):
+        """Save connection to local CSV"""
+        file_exists = self.history_file.exists()
+        try:
+            with open(self.history_file, mode='a', newline='') as f:
+                writer = csv.writer(f)
+                if not file_exists:
+                    writer.writerow(['Timestamp', 'Process', 'Company', 'IP', 'Location', 'ISP'])
+                writer.writerow([
+                    datetime.now().strftime("%Y-%m-%d %H:%M:%S"),
+                    data['process'],
+                    data['company'],
+                    data['ip'],
+                    data['location'],
+                    data['org']
+                ])
+            # Auto-sync after each log
+            self.sync_to_cloud()
+        except Exception as e:
+            print(f"Failed to log to CSV: {e}")
+
+    def sync_to_cloud(self):
+        """Sync CSV to Google Drive using rclone"""
+        def sync_task():
+            try:
+                subprocess.run(["rclone", "copy", str(self.history_file), "Sys:xcon_history/"], check=True)
+            except Exception as e:
+                print(f"Cloud sync failed: {e}")
+        
+        # Run in separate thread to not block UI
+        threading.Thread(target=sync_task, daemon=True).start()
+
+    def send_notification(self, data):
+        """Send native macOS notification with sound and severity"""
+        # Determine Severity
+        is_suspicious = data['company'] == "Unsigned Process"
+        
+        title = f"⚠️ SECURITY ALERT" if is_suspicious else f"🌐 NEW CONNECTION"
+        subtitle = f"{data['process'].upper()} ({data['company']})"
+        message = f"Location: {data['location']}\nIP: {data['ip']}"
+        
+        # Sound: "Basso" for suspicious, "Bottle" for normal
+        sound = "Basso" if is_suspicious else "Bottle"
+        
+        cmd = [
+            'osascript', '-e',
+            f'display notification "{message}" with title "{title}" subtitle "{subtitle}" sound name "{sound}"'
+        ]
+        try:
+            subprocess.run(cmd, check=True)
+        except Exception as e:
+            print(f"Notification failed: {e}")
+
     def handle_new_connection(self, data):
-        print(f"New connection detected: {data['process']} ({data['ip']})")
+        print(f"New connection: {data['process']} ({data['ip']})")
+        
         # Add to history
         self.history.insert(0, data)
         if len(self.history) > MAX_HISTORY:
@@ -349,13 +309,11 @@ class XConApp(QApplication):
         
         self.update_menu()
         
-        # Show notification
-        popup = NotificationPopup(data)
-        self.active_popups.append(popup)
-        popup.show()
+        # 1. Log to CSV
+        self.log_to_csv(data)
         
-        # Cleanup closed popups
-        self.active_popups = [p for p in self.active_popups if p.isVisible() or not p.isWidgetType()] 
+        # 2. Send Native Notification
+        self.send_notification(data)
         
     def update_menu(self):
         self.menu.clear()
@@ -364,18 +322,34 @@ class XConApp(QApplication):
         header.setEnabled(False)
         self.menu.addSeparator()
         
+        # View Log Action
+        view_log_action = self.menu.addAction("📂 View History Log (CSV)")
+        view_log_action.triggered.connect(self.view_log)
+        self.menu.addSeparator()
+        
         if not self.history:
             self.menu.addAction("No connections yet...").setEnabled(False)
         else:
             for item in self.history:
-                # Include Company in the menu text
                 company = item.get('company', 'Unknown')
-                text = f"[{item['time']}] {item['process']} ({company}) -> {item['location']}"
+                # Highlight Unsigned in menu text
+                prefix = "🚨 " if company == "Unsigned Process" else ""
+                text = f"{prefix}[{item['time']}] {item['process']} ({company}) -> {item['location']}"
                 self.menu.addAction(text)
         
         self.menu.addSeparator()
         quit_action = self.menu.addAction("Quit X-Con")
         quit_action.triggered.connect(self.quit)
+
+    def view_log(self):
+        """Open the CSV log file with the system default app"""
+        if self.history_file.exists():
+            try:
+                subprocess.run(["open", str(self.history_file)], check=True)
+            except Exception as e:
+                print(f"Failed to open log: {e}")
+        else:
+            print("History file does not exist yet.")
 
     def quit(self):
         self.monitor.running = False

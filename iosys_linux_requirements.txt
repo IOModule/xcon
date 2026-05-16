@@ -1,0 +1,32 @@
+# IOSYS by nelhorr - Linux Requirements
+
+To build or run IOSYS on Linux (tested on LMDE / Debian-based systems), you will need:
+
+## 1. Development Environment
+- **Go (Golang)**: Version 1.21 or higher.
+  ```bash
+  sudo apt update
+  sudo apt install golang
+  ```
+- **GCC**: Required for CGO (used by some dependencies).
+  ```bash
+  sudo apt install build-essential
+  ```
+- **Development Headers**: Required for the system tray (libgtk-3-dev and libayatana-appindicator3-dev).
+  ```bash
+  sudo apt install libgtk-3-dev libayatana-appindicator3-dev
+  ```
+
+## 2. Go Dependencies
+The following modules will be automatically downloaded during build:
+- `github.com/getlantern/systray`: For the system tray icon and menu.
+- `github.com/shirou/gopsutil/v3`: For process and network monitoring.
+
+## 3. Build Command
+```bash
+go build -o iosys_bin main.go
+```
+
+## 4. Run Requirements
+- **Root/Sudo Privileges**: Scanning system processes and persistence mechanisms typically requires elevated privileges.
+- **Icon**: Ensure `icon/icon.png` is in the same directory as the executable.
